@@ -1,0 +1,90 @@
+When I found out Kubernetes had support for Windows containers, I was pretty excited. I work with applications running on both Operating Systems so this opens up a lot of opportunities.
+
+I plan to explore building a CI/CD pipeline that can scale based on load, setting up monitoring (both cluster and application logs) and deploying both .NET apps in Windows containers and other apps in Linux containers - all on Kubernetes.
+
+This is part 2 in a series, in which I explore spinning up on-demand build pods that run the builds, publish the artifacts to Azure blob storage and are then destroyed. This has a couple of advantages:
+
+1. A clean build environment:
+    We own a lot of .NET projects, some of which have been around for a while and use different versions of the framework. That can sometimes mean our build machines have multiple versions of Nuget, MSBuild and .NET; which has tripped up our builds more than once. This allows us to define multiple docker images, each with it's own version of the framework and associated tools. As you'll see, the base image stays the same - the only difference is in the version of .NET we install.
+
+2. Less resource wastage:
+    There is also the added advantage of not having Jenkins build agents just idling away, using cluster resources when there are no builds.
+
+## Part 2: Jenkins with on-demand agents
+
+This post assumes you have a Jenkins master pod deployed on your cluster already. If not, ![Part 1](https://rohanc.me/kubernetes-for-everything-with-windows-and-linux-containers-on-azure-part-1) goes through that initial setup. Let's get started!
+
+### Setting up the Kubernetes plugin
+
+Before you set up builds, you'll need to configure the plugin so it can talk to your cluster.
+
+- Install ![the plugin](https://wiki.jenkins.io/display/JENKINS/Kubernetes+Plugin)
+- Configure the plugin in global settings. The important fields here are:
+    - Jenkins URL: the internal kubernetes service URL assigned to your Jenkins master service
+    - Container Cleanup Timeout: This is the amount of time after which the plugin destroys a build pod. This one is particularly important for larger windows server images, since the larger images can take a while to pull, initialize and run the build. For me, 15 mins worked well even for some of our larger projects, but this is something you can play around with to get right.
+
+
+### Jenkinsfile for Ubuntu based builds
+
+Once you've set up the plugin and got a multistage pipeline setup for a repository, the plugin allows for some really cool use cases. For example, it allows you to define multiple build containers in a single build pod, perform container specific actions within those containers, and pass the output to another container in the same pod. Underneath the hood, it achieves this by using shared volumes. So if you decide you want to build a docker image from your latest commit and then deploy your code on a Kubernetes cluster, only if your branch is `master`, this is a valid Jenkinsfile:
+
+<script src="https://gist.github.com/rchakra3/8192c2cb58c019f2c4b121d6eb232b51.js"></script>
+
+Notice how we can run certain commands only in the context of specific containers. Another important point to note is that the plugin uses the ![default jnlp image](https://hub.docker.com/r/jenkinsci/jnlp-slave/) if you don't specify a `containerTemplate` with it's name set to `jnlp`. This is an important point when we move to Windows builds.
+
+### Base image for Windows based builds
+
+Kubernetes currently only supports one Windows container per pod. Unfortunately, that means we can't take advantage of specialized containers within the Jenkinsfile like we did with the Ubuntu builds. Instead I built a base windowsservercore image, and then added specific packages to make them specialized. I used the ![windows image here](https://gist.github.com/rchakra3/ac55b33f01020b0a129460d1422ac940) from my previous post as the base, but with chocolatey and git installed. Add these lines to your Dockerfile to install chocolatey:
+
+```
+# Install git through chocolatey and add git to the path
+ENV chocolateyUseWindowsCompression false
+RUN iex ((new-object net.webclient).DownloadString('https://chocolatey.org/install.ps1')); \
+    choco install -v -y git
+```
+
+Using chocolatey, we can install almost any package that we'd need for builds. Here's a snippet for .NET 4.5.2:
+
+```
+RUN choco install netfx-4.5.2-devpack
+```
+
+MSBuild for VS2017 also has a standalone package that comes without the entire VS2017 package:
+```
+# Install msbuild (vs2017) and add to PATH
+RUN Invoke-WebRequest "https://aka.ms/vs/15/release/vs_BuildTools.exe" -OutFile vs_BuildTools.exe -UseBasicParsing ; \
+        Start-Process -FilePath 'vs_BuildTools.exe' -ArgumentList '--quiet', '--norestart', '--locale en-US' -Wait ; \
+        Remove-Item .\vs_BuildTools.exe ; \
+        Remove-Item -Force -Recurse 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
+RUN setx /M PATH $($Env:PATH + ';' + ${Env:ProgramFiles(x86)} + '\Microsoft Visual Studio\2017\BuildTools\MSBuild\15.0\Bin')
+```
+
+You can see that once we have that base image set up, everything else is as simple as adding a couple of extra packages for different build environments. 
+
+*** Note: There seems to be a bug of some kind while mapping volumes in Kubernetes with Windows. If you set C:\Jenkins as your build folder, you'll see an error along the lines of \ContainerVolumes .. is not valid. The workaround is to mount the folder as a separate drive, and use it for your builds: ***
+
+```
+# For some reason just using C:\Jenkins does not work - it tries to map to \ContainerVolumes in k8s. The workaround is to mount the folder as a drive and use it as the working directory for builds
+RUN set-itemproperty -path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices' -Name 'G:' -Value '\??\C:\Jenkins' -Type String
+```
+
+
+### Jenkinsfile for Windows based builds
+
+Here's an example of a Jenkinsfile that I've used to build one of our .NET projects:
+
+<script src="https://gist.github.com/rchakra3/d940a7425578c64524332c25096a5c46.js"></script>
+
+After a successful build, it uploads the build artifact to Azure blob storage using a ![small script I wrote](). Run the script with the `--help` flag for all the options.
+
+
+### Final thoughts
+
+Having never worked with headless installations in Windows before, discovering and using ![Chocolatey](https://chocolatey.org) was amazingly helpful. Although the packages come with no guarantees for production environments, I've not had a problem with any of them so far. Being able to kick off builds requiring a version of the .NET framework our build machine was not equipped to handle was a tedious process, and this definitely makes that process much easier.
+
+There are a lot of good examples of what you can do with the Jenkins Kubernetes plugin on their ![Github page](https://github.com/jenkinsci/kubernetes-plugin). They're written specifically with respect to the Ubuntu jnlp image though.
+
+There was a ![brief bug](https://github.com/Azure/acs-engine/issues/959) in the ACS-engine deployment of Kubernetes 1.6.6 which resulted in our windows containers not having any internet connectivity. That was frustrating, but very quickly fixed. 1.7 now has added support for managed disks on Azure, which should be interesting to play around with as well!
+
+Next up, Monitoring!
+
