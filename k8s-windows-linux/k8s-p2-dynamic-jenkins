@@ -75,12 +75,12 @@ Here's an example of a Jenkinsfile that I've used to build one of our .NET proje
 
 <script src="https://gist.github.com/rchakra3/d940a7425578c64524332c25096a5c46.js"></script>
 
-After a successful build, it uploads the build artifact to Azure blob storage using a ![small script I wrote](). Run the script with the `--help` flag for all the options.
+After a successful build, it uploads the build artifact to Azure blob storage using a ![small script I wrote](https://github.com/rchakra3/blogs/tree/master/k8s-windows-linux/code). Run the script with the `--help` flag for all the options.
 
 
 ### Final thoughts
 
-Having never worked with headless installations in Windows before, discovering and using ![Chocolatey](https://chocolatey.org) was amazingly helpful. Although the packages come with no guarantees for production environments, I've not had a problem with any of them so far. Being able to kick off builds requiring a version of the .NET framework our build machine was not equipped to handle was a tedious process, and this definitely makes that process much easier.
+Having never worked with headless installations in Windows before, discovering and using ![Chocolatey](https://chocolatey.org) was amazingly helpful. Although the packages come with no guarantees for production environments, I've not had a problem with any of them so far. Kicking off builds requiring a version of the .NET framework not on our build machine was a tedious process, and this setup definitely makes that process much easier.
 
 There are a lot of good examples of what you can do with the Jenkins Kubernetes plugin on their ![Github page](https://github.com/jenkinsci/kubernetes-plugin). They're written specifically with respect to the Ubuntu jnlp image though.
 
