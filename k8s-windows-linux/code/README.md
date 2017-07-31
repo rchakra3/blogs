@@ -1,5 +1,5 @@
 ```
-iusage: zip_upload.py [-h] [-p PATH] [-o OUT] [-n ACCOUNT_NAME]
+usage: zip_upload.py [-h] [-p PATH] [-o OUT] [-n ACCOUNT_NAME]
                      [-c CONTAINER_NAME] [-k ACCOUNT_KEY]
 
 Zip and upload file to blob storage
