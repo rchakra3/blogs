@@ -1,0 +1,100 @@
+When I found out Kubernetes had support for Windows containers, I was pretty excited. I work with applications running on both Operating Systems so this opens up a lot of opportunities. 
+
+I plan to explore building a CI/CD pipeline that can scale based on load, setting up monitoring (both cluster and application logs) and deploying both .NET apps in Windows containers and other apps in Linux containers - all on Kubernetes. 
+
+I hope to share what I've learnt through these posts, starting with employing our favorite butler!
+
+
+## Part 1: Jenkins on a hybrid Windows/Linux Kubernetes cluster
+
+In this post, I'll explain how to get a traditional Jenkins cluster with one Ubuntu and one Windows agent working. In the next one, I'll talk about on-demand dynamic agents that only spin up for a build, save the artifact and are then shut down - no wasted resources!
+
+### Deploying the cluster on Azure
+
+Deploying a hybrid Windows/linux cluster isn't supported directly through the Azure Container Service (ACS) command line tools or the portal, so we need to generate a custom ARM template. The open source acs-engine codebase makes that really easy.
+
+Just follow the instructions [here](https://github.com/Azure/acs-engine/blob/master/docs/acsengine.md#development-in-docker) to run and build acs-engine inside a container and then [generate the Kubernetes ARM template](https://github.com/Azure/acs-engine/blob/master/docs/acsengine.md#generating-a-template) in the `_output` folder. 
+For reference, [this is what my kubernetes.json file looks like](https://gist.github.com/rchakra3/8e080ebbcb0f11f429efe8853befb6aa)
+
+*** Note that if/when you want to update the cluster (modify an existing agent pool, add a new pool, etc) you should use the generated `apimodel.json` file instead of `kubernetes.json` so you keep all the same cert info, etc.**
+
+
+### Deploy the Jenkins master pod on a Linux node
+
+I've used the [official Jenkins Dockerhub image](https://hub.docker.com/_/jenkins/) for master. 
+
+All we need to do here is create the deployment and service in Kubernetes and optionally add a persistent volume. I also like to create storage classes to differentiate between using SSDs and HDDs. 
+
+(Run `kubectl apply -f [filename]` for all the YAML files)
+
+#### Create the storage classes (optional)
+
+<script src="https://gist.github.com/rchakra3/a1816d23abf6791d123d2272e84f958b.js"></script>
+
+
+#### Create the persistent storage volume
+
+<script src="https://gist.github.com/rchakra3/9406469cfacc994a2ef02417a171de2b.js"></script>
+
+
+#### Create the service and deployment
+
+<script src="https://gist.github.com/rchakra3/7e695cb6175b724ae3d0d4b9404cdb71.js"></script>
+
+<script src="https://gist.github.com/rchakra3/7c09111161c0d647b91c0cceaf10c35e.js"></script>
+Note the `nodeselector` block
+
+### Configure Jenkins master
+
+- Figure out the name of the pod running Jenkins:
+ ``` kubectl get pods ```
+
+- Get the password:
+ 
+ ``` kubectl exec [POD_NAME] cat /var/jenkins_home/secrets/initialAdminPassword ```
+<br/><br/>
+- Navigate to the IP reserved for the Jenkins-master service and enter the password. 
+
+- Click through the rest of the setup and you're done!
+
+
+### Build the Linux agent
+Add a new Jenkins agent through the UI
+<div class="image-div">
+![New Agent](https://cdn.rawgit.com/rchakra3/static-assets/5a2d8018/jenkins-kubernetes/permanent-agents/Jenkins-ubuntu-agent.png)
+</div>
+
+Once you create the agent you'll see a screen with details on setting up an agent. We're only interested in the secret. 
+
+Pass the secret in as an argument to the docker build:
+
+<script src="https://gist.github.com/rchakra3/caf270ab6ae36b43821eb224e0062898.js"></script>
+<br/>
+
+### Build the Windows agent
+
+Use the same steps to set up a new Jenkins agent and get a new secret to pass to the windows container build:
+
+<script src="https://gist.github.com/rchakra3/ac55b33f01020b0a129460d1422ac940.js"></script>
+
+*This will just get your cluster running. [Here's a link](https://gist.github.com/rchakra3/30f0db04f31f381309cfc436044ba5fb) to one that installs some basic .NET build tools.*
+
+### Create the service and deployment for both
+
+Again, note the `nodeSelector` to ensure it gets scheduled on the right nodes (based on OS)
+
+Ubuntu:
+<script src="https://gist.github.com/rchakra3/4bd7128669199e8d940efc720e9bc560.js"></script>
+
+
+Windows: 
+<script src="https://gist.github.com/rchakra3/346418455a6099b77751fb916c55e018.js"></script>
+<br/>
+
+### Final thoughts
+
+This initial setup was really not too difficult - the only thing that was an issue for me was that the windows agent connection kept timing out if I set `JENKINS_JNLP_URL` to the public IP. As soon as I set it to the internal Kubernetes service IP things started running smoothly.
+
+I'm excited to see how everything else works out!
+
+*Next up - dynamic, on-demand Windows/Linux agents using the Jenkins Kubernetes plugin!*
